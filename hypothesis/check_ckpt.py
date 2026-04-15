@@ -8,7 +8,7 @@ sys.path.append(os.getcwd())
 
 CKPTS = [
     "ckpt/quant-UCE_barack_obama_w8_weightonly_full-16-8-16-8.ckpt",
-    "ckpt/quant-UCE_barack_obama_w4_weightonly_full-16-4-16-4.ckpt",
+    # "ckpt/quant-UCE_barack_obama_w4_weightonly_full-16-4-16-4.ckpt",
 ]
 
 
