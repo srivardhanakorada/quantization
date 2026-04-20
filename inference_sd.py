@@ -23,8 +23,8 @@ import random
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model-path', type=str, default="/DATA/DATANAS1/tangsa/PCR_DiffBench/ckpt/quant-SD-w8a8-id1-re-8-8-8-8.ckpt")
-parser.add_argument('--save-path', type=str, default="outputs/imgs")
+parser.add_argument('--model-path', type=str, default="/scratch/pranavkomaku/karthik/neurips_work/quantization/ckpt/sd_1.5/uce_models/quant-UCE_donald_trump_w8_weightonly_full-16-8-16-8.ckpt")
+parser.add_argument('--save-path', type=str, default="outputs/temp_imgs")
 parser.add_argument('--seed', type=int, default=999)
 parser.add_argument('--gpu_id', type=str, default="0")
 parser.add_argument('--interaction', action="store_true")
@@ -77,7 +77,7 @@ def inference_interaction():
         base_pipe = MyStableDiffusionXLPipeline.from_pretrained("/DATA/DATANAS1/tangsa/huggingface/models--stabilityai--stable-diffusion-xl-base-1.0/snapshots/f898a3e026e802f68796b95e9702464bac78d76f", safety_checker=None, local_files_only = True, use_safetensors=True)
         # base_pipe.to("cuda")
     else:
-        base_pipe = MyStableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", safety_checker=None, local_files_only = True )
+        base_pipe = MyStableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5", safety_checker=None, local_files_only = True )
 
     print("load quantized checkpoint: ", args.model_path)
     quant_pipe = torch.load(args.model_path, map_location="cpu")

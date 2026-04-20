@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+ckpt/
+stress_test_outputs_with_base/
+scaled_models/
+
 # C extensions
 *.so
 

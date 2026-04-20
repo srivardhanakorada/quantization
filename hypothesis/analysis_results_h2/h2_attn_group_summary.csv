@@ -1,4 +1,0 @@
-attn_group,num_tensors,numel,changed_count,l1_delta,l2_delta_sq,l2_delta,linf_delta,mean_abs_delta,changed_ratio_weighted,l1_share_global,l2_energy_share_global
-cross_attention,64,43950080,18818449,29263.511688232422,125.37178482115269,0.9002801412716508,0.045723915100097656,0.0007367798330051301,0.4281778099152493,1.0,1.0
-non_attention,263,765665600,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-self_attention,64,49561600,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0

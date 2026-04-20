@@ -1,3 +1,0 @@
-family,pct_l2_change,pct_scalar_changed,update_over_bucket_mean_changed_only,same_bucket_ratio_over_fp_changed,cross_bucket_ratio_over_fp_changed,collapse_to_base_q_ratio_over_fp_changed,closer_to_uce_ratio_over_fp_changed,closer_to_base_ratio_over_fp_changed
-to_k,5.775538061128176,98.28530629475911,1.4148480370640755,0.3459358880399954,0.6540641119600046,6.14600944121303e-06,0.999996571251634,0.0
-to_v,5.350539331797096,98.02090326944987,1.3137850314378738,0.35960745734222677,0.6403925426577732,1.1550265513186325e-05,0.9999947483346748,0.0

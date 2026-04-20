@@ -1,0 +1,14 @@
+{
+  "fp_changed_ratio": 0.9999969221587874,
+  "mean_abs_delta_over_delta": 1.4257928133010864,
+  "cross_bucket_ratio": 0.6500610014355825,
+  "closer_to_erased_ratio": 1.0,
+  "fraction_le_1": 0.5636828541755676,
+  "fraction_gt_1": 0.43631717562675476,
+  "same_bucket_count": 6708058,
+  "cross_bucket_count": 12461163,
+  "total_fp_changed": 19169221,
+  "total_numel": 19169280,
+  "num_ratio_values": 19169221,
+  "hist_max_x": 8.419565200805664
+}
