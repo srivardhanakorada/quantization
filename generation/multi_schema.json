@@ -1,0 +1,32 @@
+{
+  "schema_name": "multi_concept_mixed_domains_v1",
+  "erase_concepts": [
+    "Bill Clinton",
+    "Leonardo DiCaprio",
+    "Lionel Messi"
+  ],
+  "preserve_concepts": {
+    "Bill Clinton": ["Barack Obama"],
+    "Leonardo DiCaprio": ["Brad Pitt"],
+    "Lionel Messi": ["Cristiano Ronaldo"]
+  },
+  "anchor_concepts": [
+    "a generic person"
+  ],
+  "guidance_scale": 7.5,
+  "num_inference_steps": 50,
+  "negative_prompt": "",
+  "seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  "prompt_templates": [
+    "a photo of {}",
+    "a portrait of {}",
+    "a close-up portrait of {}",
+    "a professional photo of {}",
+    "a studio portrait of {}",
+    "a candid photograph of {}",
+    "a headshot of {}",
+    "a detailed portrait of {}",
+    "a face photo of {}",
+    "an image of {}"
+  ]
+}

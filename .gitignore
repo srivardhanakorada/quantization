@@ -6,6 +6,9 @@ __pycache__/
 ckpt/
 stress_test_outputs_with_base/
 scaled_models/
+*.png
+*.safetensors
+*.ckpt
 
 # C extensions
 *.so

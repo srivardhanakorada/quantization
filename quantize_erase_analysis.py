@@ -180,17 +180,58 @@ def save_endpoint_similarity_plot(
     cosine_vals: List[float],
     out_path: str,
 ):
+    import numpy as np
+
+    cosine_vals = np.array(cosine_vals, dtype=float)
+    xs = np.arange(len(cosine_vals))   # layer indices: 0, 1, 2, ...
+
+    y_min = max(0.0, float(cosine_vals.min()) - 0.002)
+    y_max = min(1.0005, float(cosine_vals.max()) + 0.0003)
+
     plt.figure(figsize=(10.5, 4.8))
-    xs = list(range(len(layer_names)))
-    plt.bar(xs, cosine_vals, edgecolor="black")
-    plt.xticks(xs, layer_names, rotation=90, fontsize=8)
-    plt.ylim(0.0, 1.02)
+    plt.plot(xs, cosine_vals, marker='o', linewidth=2)
+
+    plt.ylim(y_min, y_max)
+    plt.xlabel("Layer index")
     plt.ylabel("Cosine similarity")
-    plt.title("Endpoint alignment between $Q(W_e)$ and $W_q^{(e)}$")
+    plt.title(r"Endpoint alignment between $Q(W_e)$ and $W_q^{(e)}$")
+    # plt.grid(True, axis='y', linestyle='--', alpha=0.4)
+
+    mean_cos = float(np.mean(cosine_vals))
+    min_cos = float(np.min(cosine_vals))
+    plt.axhline(mean_cos, linestyle='--', linewidth=1.5, alpha=0.8, label=f"Mean = {mean_cos:.6f}")
+    plt.axhline(min_cos, linestyle=':', linewidth=1.5, alpha=0.8, label=f"Min = {min_cos:.6f}")
+    plt.legend(frameon=False, fontsize=9)
+
     plt.tight_layout()
-    plt.savefig(out_path, dpi=220, bbox_inches="tight")
+    plt.savefig(out_path, dpi=240, bbox_inches="tight")
     plt.close()
 
+def save_endpoint_deviation_plot(
+    layer_names: List[str],
+    cosine_vals: List[float],
+    out_path: str,
+):
+    import numpy as np
+
+    cosine_vals = np.array(cosine_vals, dtype=float)
+    deviation = 1.0 - cosine_vals
+    xs = np.arange(len(cosine_vals))   # original layer order
+
+    plt.figure(figsize=(10.5, 4.8))
+    plt.plot(xs, deviation, marker='o', linewidth=2)
+
+    plt.xlabel("Layer index")
+    plt.ylabel(r"$1 -$ cosine similarity")
+    plt.title(r"Deviation from perfect alignment")
+    plt.grid(True, axis='y', linestyle='--', alpha=0.4)
+
+    if np.all(deviation > 0):
+        plt.yscale("log")
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=240, bbox_inches="tight")
+    plt.close()
 
 def main():
     parser = argparse.ArgumentParser()
@@ -296,8 +337,10 @@ def main():
         json.dump(metrics, f, indent=2)
 
     fig_path = os.path.join(args.out_dir, "endpoint_similarity.png")
-    print(f"[INFO] Saving endpoint similarity plot to: {fig_path}")
     save_endpoint_similarity_plot(layer_names, cosine_vals, fig_path)
+
+    dev_fig_path = os.path.join(args.out_dir, "endpoint_deviation.png")
+    save_endpoint_deviation_plot(layer_names, cosine_vals, dev_fig_path)
 
     print(f"[INFO] Saved metrics JSON to: {metrics_path}")
     print("\nDONE.")
