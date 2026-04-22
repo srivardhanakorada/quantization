@@ -4,12 +4,9 @@
 import os
 import sys
 import re
-import json
 import copy
+import json
 import argparse
-import random
-from typing import Dict, List, Any
-
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
@@ -17,36 +14,11 @@ from einops import rearrange
 
 import torch
 from torch import nn
-torch.set_grad_enabled(False)
-
-import huggingface_hub
-if not hasattr(huggingface_hub, "cached_download"):
-    huggingface_hub.cached_download = huggingface_hub.hf_hub_download
-    sys.modules["huggingface_hub"].cached_download = huggingface_hub.hf_hub_download
-
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["DIFFUSERS_OFFLINE"] = "1"
-
 from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
-from diffusers.models.attention_processor import AttnProcessor as DiffusersAttnProcessor
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-ORTHO_DECOMP_STORAGE = {}
 
 
-def safe_name(text: str) -> str:
-    text = text.strip().lower()
-    text = re.sub(r"\s+", "_", text)
-    text = re.sub(r"[^a-zA-Z0-9_\-\.]", "", text)
-    return text[:180]
-
-
-def ensure_dir(path: str):
-    os.makedirs(path, exist_ok=True)
-
-
-def seed_everything_local(seed: int, deterministic: bool = False):
+def seed_everything(seed, deterministic=False):
+    import random
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -62,7 +34,7 @@ def get_token(prompt, tokenizer=None):
         padding="max_length",
         max_length=77,
         truncation=True,
-        return_tensors="pt",
+        return_tensors="pt"
     ).input_ids
     return tokens
 
@@ -91,12 +63,11 @@ def process_img(decoded_image):
     return Image.fromarray(decoded_image)
 
 
-def load_schema(schema_path: str) -> Dict[str, Any]:
+def load_schema(schema_path):
     with open(schema_path, "r") as f:
         schema = json.load(f)
 
     required = [
-        "schema_name",
         "erase_concepts",
         "preserve_concepts",
         "anchor_concepts",
@@ -116,94 +87,57 @@ def load_schema(schema_path: str) -> Dict[str, Any]:
         raise ValueError("preserve_concepts must be a list")
     if not isinstance(schema["anchor_concepts"], list):
         raise ValueError("anchor_concepts must be a list")
-    if not isinstance(schema["negative_prompt"], str):
-        raise ValueError("negative_prompt must be a string")
-    if not isinstance(schema["seeds"], list) or len(schema["seeds"]) == 0:
-        raise ValueError("seeds must be a non-empty list")
     if not isinstance(schema["prompt_templates"], list) or len(schema["prompt_templates"]) == 0:
         raise ValueError("prompt_templates must be a non-empty list")
+    if not isinstance(schema["seeds"], list) or len(schema["seeds"]) == 0:
+        raise ValueError("seeds must be a non-empty list")
+    if not isinstance(schema["negative_prompt"], str):
+        raise ValueError("negative_prompt must be a string")
 
     return schema
 
 
-def flatten_concepts(schema: Dict[str, Any], include_anchor: bool) -> Dict[str, List[str]]:
-    return {
-        "erase": list(schema["erase_concepts"]),
-        "preserve": list(schema["preserve_concepts"]),
-        "anchor": list(schema["anchor_concepts"]) if include_anchor else [],
-    }
+def unique_keep_order(items):
+    seen = set()
+    out = []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
 
 
-def build_generation_plan(schema: Dict[str, Any], include_anchor: bool) -> List[Dict[str, Any]]:
-    groups = flatten_concepts(schema, include_anchor=include_anchor)
-    templates = schema["prompt_templates"]
-    seeds = schema["seeds"]
-
-    jobs = []
-    for group_name, concepts in groups.items():
-        for concept in concepts:
-            for template_idx, template in enumerate(templates):
-                prompt = template.format(concept)
-                for seed in seeds:
-                    jobs.append({
-                        "group": group_name,
-                        "concept": concept,
-                        "template": template,
-                        "template_idx": template_idx,
-                        "seed": int(seed),
-                        "prompt": prompt,
-                    })
-    return jobs
+def safe_name(text):
+    text = text.strip().lower()
+    text = re.sub(r"\s+", "_", text)
+    text = re.sub(r"[^a-zA-Z0-9_\-\.]", "", text)
+    return text[:180]
 
 
-def save_metadata(out_dir: str, schema: Dict[str, Any], jobs: List[Dict[str, Any]], args):
+def save_metadata(save_root, schema, args):
+    os.makedirs(save_root, exist_ok=True)
     meta = {
         "schema_path": args.schema_path,
-        "model_name": args.model_name,
-        "schema_name": schema.get("schema_name", "unknown"),
-        "guidance_scale": schema["guidance_scale"],
-        "num_inference_steps": schema["num_inference_steps"],
-        "negative_prompt": schema["negative_prompt"],
-        "num_jobs": len(jobs),
-        "batch_size": args.batch_size,
+        "sd_ckpt": args.sd_ckpt,
         "include_anchor": args.include_anchor,
+        "mode": args.mode,
         "record_type": args.record_type,
+        "decomp_timestep": args.decomp_timestep,
         "sigmoid_a": args.sigmoid_a,
         "sigmoid_b": args.sigmoid_b,
         "sigmoid_c": args.sigmoid_c,
-        "decomp_timestep": args.decomp_timestep,
-        "device": args.device,
-        "dtype": args.dtype,
-        "mode": args.mode,
+        "guidance_scale": float(schema["guidance_scale"]),
+        "num_inference_steps": int(schema["num_inference_steps"]),
+        "negative_prompt": schema["negative_prompt"],
+        "schema_name": schema.get("schema_name", "unknown"),
+        "seeds": schema["seeds"],
+        "prompt_templates": schema["prompt_templates"],
     }
-    with open(os.path.join(out_dir, "run_config.json"), "w") as f:
+    with open(os.path.join(save_root, "run_config.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
-    with open(os.path.join(out_dir, "resolved_schema.json"), "w") as f:
+    with open(os.path.join(save_root, "resolved_schema.json"), "w") as f:
         json.dump(schema, f, indent=2)
-
-    with open(os.path.join(out_dir, "generation_manifest.jsonl"), "w") as f:
-        for j in jobs:
-            f.write(json.dumps(j) + "\n")
-
-
-def save_image_with_sidecar(
-    img: Image.Image,
-    job: Dict[str, Any],
-    out_dir: str,
-    global_index: int,
-    mode: str,
-):
-    group_dir = os.path.join(out_dir, mode, job["group"], safe_name(job["concept"]))
-    ensure_dir(group_dir)
-
-    base_name = (
-        f"{global_index:05d}"
-        f"_t{job['template_idx']:02d}"
-        f"_s{job['seed']:02d}"
-        f"_{safe_name(job['concept'])}"
-    )
-    img.save(os.path.join(group_dir, base_name + ".png"))
 
 
 class VisualAttentionProcess(nn.Module):
@@ -228,20 +162,20 @@ class VisualAttentionProcess(nn.Module):
         self.decomp_timestep = decomp_timestep
 
     def __call__(self, attn, hidden_states, encoder_hidden_states, *args, **kwargs):
-        attn._modules.pop("processor", None)
-        attn.processor = AdaVDAttnProcessor(
+        attn._modules.pop("processor")
+        attn.processor = AttnProcessor(
             self.module_name,
             self.atten_type,
             self.target_records,
             self.record,
             self.record_type,
             self.sigmoid_setting,
-            self.decomp_timestep,
+            self.decomp_timestep
         )
         return attn.processor(attn, hidden_states, encoder_hidden_states, *args, **kwargs)
 
 
-class AdaVDAttnProcessor:
+class AttnProcessor():
     def __init__(
         self,
         module_name=None,
@@ -250,11 +184,11 @@ class AdaVDAttnProcessor:
         record=False,
         record_type=None,
         sigmoid_setting=None,
-        decomp_timestep=0,
-    ):
+        decomp_timestep=0
+    ) -> None:
         self.module_name = module_name
         self.atten_type = atten_type
-        self.target_records = copy.copy(target_records) if target_records is not None else {}
+        self.target_records = copy.copy(target_records)
         self.record = record
         self.record_type = record_type.strip().split(',') if record_type is not None else []
         self.records = {key: {} for key in self.record_type} if record_type is not None else {}
@@ -266,78 +200,30 @@ class AdaVDAttnProcessor:
         return c / (1 + torch.exp(-a * (x - b)))
 
     def cal_ortho_decomp(self, target_value, pro_record, ortho_basis=None, project_matrix=None):
-        orig_dtype = pro_record.dtype
-
-        target_value = target_value.float()
-        pro_record = pro_record.float()
-        if ortho_basis is not None:
-            ortho_basis = ortho_basis.float()
-        if project_matrix is not None:
-            project_matrix = project_matrix.float()
-
         if ortho_basis is None and project_matrix is None:
             tar_record_ = target_value[0].permute(1, 0, 2).reshape(77, -1)
             pro_record_ = pro_record.permute(1, 0, 2).reshape(77, -1)
-
             dot1 = (tar_record_ * pro_record_).sum(-1)
-            dot2 = (tar_record_ * tar_record_).sum(-1).clamp_min(1e-12)
+            dot2 = (tar_record_ * tar_record_).sum(-1)
             cos_sim = torch.cosine_similarity(tar_record_, pro_record_, dim=-1)
-
             if self.sigmoid_setting is not None:
                 cos_sim = self.sigmoid(cos_sim, self.sigmoid_setting)
-
             weight = torch.nan_to_num(cos_sim * (dot1 / dot2), nan=0.0)
             weight[0].fill_(0)
-
-            era_record = (
-                weight.unsqueeze(0).unsqueeze(-1)
-                * tar_record_.view((77, 16, -1)).permute(1, 0, 2)
-            )
+            era_record = weight.unsqueeze(0).unsqueeze(-1) * tar_record_.view((77, 16, -1)).permute(1, 0, 2)
         else:
             tar_record_ = rearrange(target_value, 'b h l d -> l b (h d)')
             pro_record_ = rearrange(pro_record, 'h l d -> l (h d)').unsqueeze(1)
-
             dot1 = (ortho_basis * pro_record_).sum(-1)
-            dot2 = (ortho_basis * ortho_basis).sum(-1).clamp_min(1e-12)
+            dot2 = (ortho_basis * ortho_basis).sum(-1)
             weight = torch.nan_to_num((dot1 / dot2).unsqueeze(1), nan=0.0)
             weight[0].fill_(0)
-
             cos_sim = torch.cosine_similarity(tar_record_, pro_record_, dim=-1)
             if self.sigmoid_setting is not None:
                 cos_sim = self.sigmoid(cos_sim, self.sigmoid_setting)
-
             projected_basis = torch.bmm(project_matrix, cos_sim.unsqueeze(-1) * tar_record_)
             era_record = torch.bmm(weight, projected_basis).view((77, 16, -1)).permute(1, 0, 2)
-
-        return era_record.to(orig_dtype)
-
-    def gram_schmidt(self, V):
-        V = V.float()
-        n = len(V)
-        project_matrix = torch.zeros((n, n), dtype=V.dtype, device=V.device)
-        project_matrix += torch.diag(torch.ones(n, dtype=V.dtype, device=V.device))
-
-        for i in range(1, n):
-            vi = V[i:i+1, :]
-            for j in range(i):
-                qj = V[j:j+1, :]
-                denom = torch.dot(qj.view(-1), qj.view(-1)).clamp_min(1e-12)
-                project_matrix[i][j] = -torch.dot(qj.view(-1), vi.view(-1)) / denom
-
-        ortho_basis = torch.matmul(project_matrix, V)
-        return project_matrix, ortho_basis
-
-    def cal_gram_schmidt(self, target_value):
-        target_value = target_value.float()
-        target_value = target_value.view((2, int(len(target_value)//16), -1) + target_value.size()[-2:])
-        target_value = target_value.permute(1, 0, 2, 3, 4).contiguous().view(
-            (target_value.size()[1], -1) + target_value.size()[-2:]
-        )
-        target_value_ = rearrange(target_value, 'b h l d -> b l (h d)')
-        results = [self.gram_schmidt(target_value_[:, i, :]) for i in range(target_value_.size()[1])]
-        project_matrix = torch.stack([result[0] for result in results], dim=0)
-        basis_ortho = torch.stack([result[1] for result in results], dim=0)
-        return project_matrix, basis_ortho
+        return era_record
 
     def record_ortho_decomp(self, target_record, current_record):
         current_name = next(k for k in target_record if k.endswith(self.module_name))
@@ -347,18 +233,15 @@ class AdaVDAttnProcessor:
         if int(current_timestep) <= self.decomp_timestep:
             return current_record, current_record
 
-        if current_block not in ORTHO_DECOMP_STORAGE:
+        if current_block in ORTHO_DECOMP_STORAGE:
+            pass
+        else:
             target_value = target_value.view((2, int(len(target_value)//16), -1) + target_value.size()[-2:])
-            target_value = target_value.permute(1, 0, 2, 3, 4).contiguous().view(
-                (target_value.size()[1], -1) + target_value.size()[-2:]
-            )
-
+            target_value = target_value.permute(1, 0, 2, 3, 4).contiguous().view((target_value.size()[1], -1) + target_value.size()[-2:])
             current_record = current_record.view((2, int(len(current_record)//16), -1) + target_value.size()[-2:])
-            current_record = current_record.permute(1, 0, 2, 3, 4).contiguous().view(
-                (current_record.size()[1], -1) + target_value.size()[-2:]
-            )
-
+            current_record = current_record.permute(1, 0, 2, 3, 4).contiguous().view((current_record.size()[1], -1) + target_value.size()[-2:])
             erase_record, retain_record = [], []
+
             for pro_record in current_record:
                 era_record = self.cal_ortho_decomp(target_value, pro_record, ortho_basis, project_matrix)
                 ret_record = pro_record - era_record
@@ -370,6 +253,26 @@ class AdaVDAttnProcessor:
             ORTHO_DECOMP_STORAGE[current_block] = (erase_record, retain_record)
 
         return ORTHO_DECOMP_STORAGE[current_block]
+
+    def cal_gram_schmidt(self, target_value):
+        target_value = target_value.view((2, int(len(target_value)//16), -1) + target_value.size()[-2:])
+        target_value = target_value.permute(1, 0, 2, 3, 4).contiguous().view((target_value.size()[1], -1) + target_value.size()[-2:])
+        target_value_ = rearrange(target_value, 'b h l d -> b l (h d)')
+        results = [self.gram_schmidt(target_value_[:, i, :]) for i in range(target_value_.size()[1])]
+        project_matrix = torch.stack([result[0] for result in results], dim=0)
+        basis_ortho = torch.stack([result[1] for result in results], dim=0)
+        return project_matrix, basis_ortho
+
+    def gram_schmidt(self, V):
+        n = len(V)
+        project_matrix = torch.zeros((n, n), dtype=V.dtype).to(V.device) + torch.diag(torch.ones(n, dtype=V.dtype)).to(V.device)
+        for i in range(1, n):
+            vi = V[i:i+1, :]
+            for j in range(i):
+                qj = V[j:j+1, :]
+                project_matrix[i][j] = -torch.dot(qj.view(-1), vi.view(-1)) / torch.dot(qj.view(-1), qj.view(-1))
+        ortho_basis = torch.matmul(project_matrix.to(V.device), V)
+        return project_matrix.to(V.device), ortho_basis
 
     def __call__(self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None, temb=None):
         residual = hidden_states
@@ -405,32 +308,18 @@ class AdaVDAttnProcessor:
 
         if not self.record and encoder_hidden_states.shape[1] == 77:
             if 'queries' in self.target_records:
-                erase_query, retain_query = self.record_ortho_decomp(
-                    target_record=self.target_records['queries'],
-                    current_record=query,
-                )
+                erase_query, retain_query = self.record_ortho_decomp(self.target_records['queries'], query)
                 query = retain_query if self.atten_type == 'retain' else erase_query if self.atten_type == 'erase' else query
-
             if 'keys' in self.target_records:
-                erase_key, retain_key = self.record_ortho_decomp(
-                    target_record=self.target_records['keys'],
-                    current_record=key,
-                )
+                erase_key, retain_key = self.record_ortho_decomp(self.target_records['keys'], key)
                 key = retain_key if self.atten_type == 'retain' else erase_key if self.atten_type == 'erase' else key
 
         attention_probs = attn.get_attention_scores(query, key, attention_mask)
 
         if not self.record and encoder_hidden_states.shape[1] == 77:
             if 'attn_maps' in self.target_records:
-                erase_attention_probs, retain_attention_probs = self.record_ortho_decomp(
-                    target_record=self.target_records['attn_maps'],
-                    current_record=attention_probs,
-                )
-                attention_probs = (
-                    retain_attention_probs if self.atten_type == 'retain'
-                    else erase_attention_probs if self.atten_type == 'erase'
-                    else attention_probs
-                )
+                erase_attention_probs, retain_attention_probs = self.record_ortho_decomp(self.target_records['attn_maps'], attention_probs)
+                attention_probs = retain_attention_probs if self.atten_type == 'retain' else erase_attention_probs if self.atten_type == 'erase' else attention_probs
 
         if encoder_hidden_states.shape[1] != 77:
             hidden_states = torch.bmm(attention_probs, value)
@@ -439,16 +328,12 @@ class AdaVDAttnProcessor:
                 for kk, vv in {'queries': query, 'keys': key, 'values': value, 'attn_maps': attention_probs}.items():
                     if kk in self.record_type:
                         if vv.shape[0] // 16 == 1:
-                            self.records[kk][self.module_name] = [vv, None, None]
+                            self.records[kk][self.module_name] = [vv] + [None, None]
                         else:
                             self.records[kk][self.module_name] = [vv] + list(self.cal_gram_schmidt(vv))
             elif 'values' in self.target_records:
-                erase_value, retain_value = self.record_ortho_decomp(
-                    target_record=self.target_records['values'],
-                    current_record=value,
-                )
+                erase_value, retain_value = self.record_ortho_decomp(self.target_records['values'], value)
                 value = retain_value if self.atten_type == 'retain' else erase_value if self.atten_type == 'erase' else value
-
             hidden_states = torch.bmm(attention_probs, value)
 
         hidden_states = attn.batch_to_head_dim(hidden_states)
@@ -457,63 +342,28 @@ class AdaVDAttnProcessor:
 
         if input_ndim == 4:
             hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
-
         if attn.residual_connection:
             hidden_states = hidden_states + residual
 
         return hidden_states / attn.rescale_output_factor
 
 
-def reset_attention_processors(unet):
-    for name, m in unet.named_modules():
-        if name.endswith("attn1") or name.endswith("attn2"):
-            try:
-                m.set_processor(DiffusersAttnProcessor())
-            except Exception:
-                pass
-    return unet
-
-
-def set_attenprocessor(
-    unet,
-    atten_type='original',
-    target_records=None,
-    record=False,
-    record_type=None,
-    sigmoid_setting=None,
-    decomp_timestep=0
-):
+def set_attenprocessor(unet, atten_type='original', target_records=None, record=False, record_type=None, sigmoid_setting=None, decomp_timestep=0):
     for name, m in unet.named_modules():
         if name.endswith('attn2') or name.endswith('attn1'):
-            try:
-                m.set_processor(
-                    VisualAttentionProcess(
-                        module_name=name,
-                        atten_type=atten_type,
-                        target_records=target_records,
-                        record=record,
-                        record_type=record_type,
-                        sigmoid_setting=sigmoid_setting,
-                        decomp_timestep=decomp_timestep,
-                    )
-                )
-            except Exception as e:
-                print(f"[WARN] Could not set processor for {name}: {e}")
+            m.set_processor(VisualAttentionProcess(
+                module_name=name,
+                atten_type=atten_type,
+                target_records=target_records,
+                record=record,
+                record_type=record_type,
+                sigmoid_setting=sigmoid_setting,
+                decomp_timestep=decomp_timestep
+            ))
     return unet
 
 
-def diffusion(
-    unet,
-    scheduler,
-    latents,
-    text_embeddings,
-    total_timesteps,
-    start_timesteps=0,
-    guidance_scale=7.5,
-    record=False,
-    record_type=None,
-    desc=None,
-):
+def diffusion(unet, scheduler, latents, text_embeddings, total_timesteps, start_timesteps=0, guidance_scale=7.5, record=False, record_type=None, desc=None, **kwargs):
     visualize_map_withstep = {key: {} for key in record_type.strip().split(',')} if record_type is not None else {}
 
     scheduler.set_timesteps(total_timesteps)
@@ -528,11 +378,10 @@ def diffusion(
         ).sample
 
         if record:
-            for t in record_type.strip().split(','):
+            for type_name in record_type.strip().split(','):
                 for value in unet.attn_processors.values():
-                    if hasattr(value, "records"):
-                        for k, v in value.records[t].items():
-                            visualize_map_withstep[t][f'{timestep.item()}.{k}'] = v
+                    for k, v in value.records[type_name].items():
+                        visualize_map_withstep[type_name][f'{timestep.item()}.{k}'] = v
 
         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
@@ -541,146 +390,7 @@ def diffusion(
     return (latents, visualize_map_withstep) if record else latents
 
 
-def load_normal_pipe(model_name: str, device: str, dtype_str: str):
-    dtype = torch.float16 if dtype_str == "fp16" else torch.float32
-    print(f"[INFO] Loading model: {model_name}")
-    pipe = DiffusionPipeline.from_pretrained(
-        model_name,
-        safety_checker=None,
-        torch_dtype=dtype,
-    )
-    pipe = pipe.to(device)
-    pipe.unet.eval()
-    pipe.text_encoder.eval()
-    pipe.vae.eval()
-    return pipe
-
-
-def build_target_concept_encoding(target_concepts: List[str], tokenizer, text_encoder):
-    target_concept_encodings_ = [
-        get_textencoding(get_token(concept, tokenizer), text_encoder)
-        for concept in target_concepts
-    ]
-    target_eot_idxs = [get_eot_idx(get_token(concept, tokenizer)) for concept in target_concepts]
-    target_concept_encoding = [
-        get_spread_embedding(target_concept_encoding_, idx)
-        for (target_concept_encoding_, idx) in zip(target_concept_encodings_, target_eot_idxs)
-    ]
-    return torch.concat(target_concept_encoding)
-
-
-def compute_target_records(
-    unet,
-    scheduler,
-    target_concept_encoding,
-    uncond_encoding,
-    guidance_scale,
-    record_type,
-    total_timesteps,
-    device,
-):
-    reset_attention_processors(unet)
-    unet = set_attenprocessor(
-        unet,
-        atten_type='original',
-        record=True,
-        record_type=record_type,
-    )
-
-    _, target_records = diffusion(
-        unet=unet,
-        scheduler=scheduler,
-        latents=torch.zeros(
-            len(target_concept_encoding), 4, 64, 64,
-            device=device, dtype=target_concept_encoding.dtype
-        ),
-        text_embeddings=torch.cat(
-            [uncond_encoding] * len(target_concept_encoding) + [target_concept_encoding],
-            dim=0
-        ),
-        total_timesteps=1,
-        start_timesteps=0,
-        guidance_scale=guidance_scale,
-        record=True,
-        record_type=record_type,
-        desc="Calculating target records on base model",
-    )
-
-    scheduler.set_timesteps(total_timesteps)
-    original_keys = list(target_records[record_type].keys())
-    target_records[record_type].update({
-        f"{timestep}.{'.'.join(key.split('.')[1:])}": target_records[record_type][key]
-        for timestep in scheduler.timesteps
-        for key in original_keys
-    })
-    return target_records
-
-
-def prepare_text_embeddings_for_batch(prompts, negative_prompt, tokenizer, text_encoder, device):
-    cond_tokens = tokenizer(
-        prompts,
-        padding="max_length",
-        max_length=77,
-        truncation=True,
-        return_tensors="pt",
-    ).input_ids.to(device)
-
-    neg_prompts = [negative_prompt] * len(prompts)
-    uncond_tokens = tokenizer(
-        neg_prompts,
-        padding="max_length",
-        max_length=77,
-        truncation=True,
-        return_tensors="pt",
-    ).input_ids.to(device)
-
-    cond_encoding = text_encoder(cond_tokens)[0]
-    uncond_encoding = text_encoder(uncond_tokens)[0]
-    text_embeddings = torch.cat([uncond_encoding, cond_encoding], dim=0)
-    return text_embeddings
-
-
-def decode_latents_to_pil(vae, latents):
-    images = []
-    for img in latents:
-        decoded = vae.decode(img.unsqueeze(0) / vae.config.scaling_factor, return_dict=False)[0]
-        images.append(process_img(decoded))
-    return images
-
-
-def run_mode_batch(
-    mode_name,
-    unet,
-    scheduler,
-    latents,
-    text_embeddings,
-    total_timesteps,
-    guidance_scale,
-    target_records,
-    sigmoid_setting,
-    decomp_timestep,
-):
-    reset_attention_processors(unet)
-
-    if mode_name != "original":
-        unet = set_attenprocessor(
-            unet,
-            atten_type=mode_name,
-            target_records=copy.deepcopy(target_records),
-            sigmoid_setting=sigmoid_setting,
-            decomp_timestep=decomp_timestep,
-        )
-
-    return diffusion(
-        unet=unet,
-        scheduler=scheduler,
-        latents=latents,
-        start_timesteps=0,
-        text_embeddings=text_embeddings,
-        total_timesteps=total_timesteps,
-        guidance_scale=guidance_scale,
-        desc=f"batch | {mode_name}",
-    )
+ORTHO_DECOMP_STORAGE = {}
 
 
 @torch.no_grad()
@@ -688,159 +398,165 @@ def main():
     global ORTHO_DECOMP_STORAGE
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, default="runwayml/stable-diffusion-v1-5")
-    parser.add_argument("--schema_path", required=True, type=str)
-    parser.add_argument("--out_dir", required=True, type=str)
-
-    parser.add_argument("--mode", type=str, default="original,erase,retain")
-    parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--include_anchor", action="store_true")
-    parser.add_argument("--start_index", type=int, default=0)
-
-    parser.add_argument("--device", type=str, default=DEVICE)
-    parser.add_argument("--dtype", type=str, choices=["fp16", "fp32"], default="fp16")
-
-    parser.add_argument("--record_type", type=str, default="values")
-    parser.add_argument("--decomp_timestep", type=int, default=0)
-    parser.add_argument("--sigmoid_a", type=float, default=100.0)
-    parser.add_argument("--sigmoid_b", type=float, default=0.93)
-    parser.add_argument("--sigmoid_c", type=float, default=2.0)
-
+    parser.add_argument('--save_root', type=str, required=True)
+    parser.add_argument('--sd_ckpt', type=str, default="runwayml/stable-diffusion-v1-5")
+    parser.add_argument('--seed', type=int, default=None)
+    parser.add_argument('--mode', type=str, default='retain', help='keep as retain')
+    parser.add_argument('--decomp_timestep', type=int, default=0)
+    parser.add_argument('--batch_size', type=int, default=None)
+    parser.add_argument('--sigmoid_a', type=float, default=100)
+    parser.add_argument('--sigmoid_b', type=float, default=0.93)
+    parser.add_argument('--sigmoid_c', type=float, default=2)
+    parser.add_argument('--record_type', type=str, default='values')
+    parser.add_argument('--schema_path', type=str, required=True)
+    parser.add_argument('--include_anchor', action='store_true')
     args = parser.parse_args()
-    ensure_dir(args.out_dir)
 
     schema = load_schema(args.schema_path)
-    jobs = build_generation_plan(schema, include_anchor=args.include_anchor)
-    save_metadata(args.out_dir, schema, jobs, args)
 
-    mode_list = [m.strip() for m in args.mode.split(",") if m.strip()]
-    if len(mode_list) == 0:
-        raise ValueError("mode must contain at least one of original, erase, retain")
-
-    pipe = load_normal_pipe(args.model_name, args.device, args.dtype)
-    pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
-    pipe.set_progress_bar_config(disable=False)
-
-    tokenizer = pipe.tokenizer
-    text_encoder = pipe.text_encoder
-    vae = pipe.vae
-    unet = pipe.unet
-
-    target_concepts = list(schema["erase_concepts"])
-    target_concept_encoding = build_target_concept_encoding(target_concepts, tokenizer, text_encoder)
-
-    base_uncond_encoding = get_textencoding(get_token(schema["negative_prompt"], tokenizer), text_encoder)
-
-    target_records = None
-    if "erase" in mode_list or "retain" in mode_list:
-        target_records = compute_target_records(
-            unet=unet,
-            scheduler=pipe.scheduler,
-            target_concept_encoding=target_concept_encoding,
-            uncond_encoding=base_uncond_encoding,
-            guidance_scale=float(schema["guidance_scale"]),
-            record_type=args.record_type,
-            total_timesteps=int(schema["num_inference_steps"]),
-            device=args.device,
-        )
+    if schema["negative_prompt"] != "":
+        raise ValueError("For faithful original-style AdaVD, schema['negative_prompt'] must be ''.")
 
     guidance_scale = float(schema["guidance_scale"])
-    num_inference_steps = int(schema["num_inference_steps"])
-    negative_prompt = schema["negative_prompt"]
+    total_timesteps = int(schema["num_inference_steps"])
 
-    print(f"[INFO] Total generations to run: {len(jobs)}")
-    print(f"[INFO] Modes: {mode_list}")
-    print(f"[INFO] Batch size: {args.batch_size}")
+    target_concepts = [item.strip() for item in schema["erase_concepts"]]
+    contents = list(schema["erase_concepts"]) + list(schema["preserve_concepts"])
+    if args.include_anchor:
+        contents += list(schema["anchor_concepts"])
+    concept_list = unique_keep_order([item.strip() for item in contents])
 
-    global_idx = args.start_index
-    start = 0
+    prompt_templates = list(schema["prompt_templates"])
+    schema_seeds = [int(s) for s in schema["seeds"]]
+    num_samples = len(schema_seeds)
 
-    while start < len(jobs):
-        end = min(start + args.batch_size, len(jobs))
-        batch_jobs = jobs[start:end]
-        prompts = [j["prompt"] for j in batch_jobs]
-        seeds = [int(j["seed"]) for j in batch_jobs]
+    bs = args.batch_size if args.batch_size is not None else num_samples
+    if bs != num_samples:
+        raise ValueError(f"For seed-aligned comparison, batch_size must equal number of schema seeds ({num_samples}).")
 
-        text_embeddings = prepare_text_embeddings_for_batch(
-            prompts=prompts,
-            negative_prompt=negative_prompt,
-            tokenizer=tokenizer,
-            text_encoder=text_encoder,
-            device=args.device,
-        )
+    save_metadata(args.save_root, schema, args)
 
-        latents_per_item = []
-        latent_dtype = text_embeddings.dtype if args.dtype == "fp16" else torch.float32
-        gen_device = args.device if args.device.startswith("cuda") else "cpu"
-        for seed in seeds:
-            g = torch.Generator(device=gen_device)
-            g.manual_seed(seed)
-            lat = torch.randn((1, 4, 64, 64), generator=g, device=args.device, dtype=latent_dtype)
-            latents_per_item.append(lat)
-        latents = torch.cat(latents_per_item, dim=0)
+    pipe = DiffusionPipeline.from_pretrained(
+        args.sd_ckpt,
+        safety_checker=None,
+        torch_dtype=torch.float16,
+        local_files_only=True,
+    ).to('cuda')
+    pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+    unet, tokenizer, text_encoder, vae = pipe.unet, pipe.tokenizer, pipe.text_encoder, pipe.vae
 
-        print(f"[INFO] Generating batch {start}:{end}")
+    unet_retain = copy.deepcopy(unet)
 
-        outputs_by_mode = {}
-        for mode_name in mode_list:
-            ORTHO_DECOMP_STORAGE = {}
-            out_latents = run_mode_batch(
-                mode_name=mode_name,
-                unet=unet,
-                scheduler=pipe.scheduler,
-                latents=latents.clone(),
-                text_embeddings=text_embeddings,
-                total_timesteps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                target_records=target_records,
+    target_concept_encodings_ = [get_textencoding(get_token(concept, tokenizer), text_encoder) for concept in target_concepts]
+    target_eot_idxs = [get_eot_idx(get_token(concept, tokenizer)) for concept in target_concepts]
+    target_concept_encoding = [
+        get_spread_embedding(target_concept_encoding_, idx)
+        for (target_concept_encoding_, idx) in zip(target_concept_encodings_, target_eot_idxs)
+    ]
+    target_concept_encoding = torch.concat(target_concept_encoding)
+
+    uncond_encoding = get_textencoding(get_token('', tokenizer), text_encoder)
+
+    unet = set_attenprocessor(unet, atten_type='original', record=True, record_type=args.record_type)
+    _, target_records = diffusion(
+        unet=unet,
+        scheduler=pipe.scheduler,
+        latents=torch.zeros(len(target_concept_encoding), 4, 64, 64).to(pipe.device, dtype=target_concept_encoding.dtype),
+        text_embeddings=torch.cat([uncond_encoding] * len(target_concept_encoding) + [target_concept_encoding], dim=0),
+        total_timesteps=1,
+        start_timesteps=0,
+        guidance_scale=guidance_scale,
+        record=True,
+        record_type=args.record_type,
+        desc="Calculating target records",
+    )
+    pipe.scheduler.set_timesteps(total_timesteps)
+    original_keys = target_records[args.record_type].keys()
+    target_records[args.record_type].update({
+        f"{timestep}.{'.'.join(key.split('.')[1:])}": target_records[args.record_type][key]
+        for timestep in pipe.scheduler.timesteps
+        for key in original_keys
+    })
+    del unet
+
+    latent_bank = []
+    for s in schema_seeds:
+        seed_use = args.seed if args.seed is not None else s
+        seed_everything(seed_use, True)
+        latent = torch.randn(1, 4, 64, 64).to(pipe.device, dtype=target_concept_encoding.dtype)
+        latent_bank.append(latent)
+    latent_bank = torch.cat(latent_bank, dim=0)
+
+    manifest_path = os.path.join(args.save_root, "generation_manifest.jsonl")
+    mf = open(manifest_path, "w")
+
+    global_prompt_idx = 0
+
+    for concept in concept_list:
+        prompts = [tmpl.format(concept) for tmpl in prompt_templates]
+
+        for template_idx, prompt in enumerate(prompts):
+            ORTHO_DECOMP_STORAGE, Images = {}, {}
+            encoding = get_textencoding(get_token(prompt, tokenizer), text_encoder)
+            batch_text_embeddings = torch.cat([uncond_encoding] * bs + [encoding] * bs, dim=0)
+
+            unet_retain = set_attenprocessor(
+                unet_retain,
+                atten_type='retain',
+                target_records=copy.deepcopy(target_records),
                 sigmoid_setting=(args.sigmoid_a, args.sigmoid_b, args.sigmoid_c),
                 decomp_timestep=args.decomp_timestep,
             )
-            outputs_by_mode[mode_name] = decode_latents_to_pil(vae, out_latents)
+            Images['retain'] = diffusion(
+                unet=unet_retain,
+                scheduler=pipe.scheduler,
+                latents=latent_bank.clone(),
+                start_timesteps=0,
+                text_embeddings=batch_text_embeddings,
+                total_timesteps=total_timesteps,
+                guidance_scale=guidance_scale,
+                desc=f"{prompt} | retain"
+            )
 
-        for batch_offset, job in enumerate(batch_jobs):
-            per_mode_images = []
-            for mode_name in mode_list:
-                img = outputs_by_mode[mode_name][batch_offset]
-                save_image_with_sidecar(
-                    img=img,
-                    job=job,
-                    out_dir=args.out_dir,
-                    global_index=global_idx,
-                    mode=mode_name,
+            decoded_imgs = {
+                name: [process_img(vae.decode(img.unsqueeze(0) / vae.config.scaling_factor, return_dict=False)[0]) for img in img_list]
+                for name, img_list in Images.items()
+            }
+
+            if concept in schema["erase_concepts"]:
+                split_name = "erase"
+            elif concept in schema["preserve_concepts"]:
+                split_name = "preserve"
+            else:
+                global_prompt_idx += 1
+                continue
+
+            save_dir = os.path.join(args.save_root, split_name, safe_name(concept))
+            os.makedirs(save_dir, exist_ok=True)
+
+            for idx, seed_val in enumerate(schema_seeds):
+                filename = (
+                    f"{global_prompt_idx:05d}"
+                    f"_t{template_idx:02d}"
+                    f"_s{seed_val:02d}"
+                    f"_{safe_name(concept)}.png"
                 )
-                per_mode_images.append(img)
+                decoded_imgs['retain'][idx].save(os.path.join(save_dir, filename))
 
-            if len(mode_list) > 1:
-                combine_dir = os.path.join(
-                    args.out_dir,
-                    "combine",
-                    job["group"],
-                    safe_name(job["concept"]),
-                )
-                ensure_dir(combine_dir)
+                mf.write(json.dumps({
+                    "global_prompt_idx": global_prompt_idx,
+                    "split": split_name,
+                    "concept": concept,
+                    "template_idx": template_idx,
+                    "prompt": prompt,
+                    "seed": seed_val,
+                    "filename": filename,
+                }) + "\n")
 
-                widths, heights = zip(*(img.size for img in per_mode_images))
-                combined = Image.new("RGB", (sum(widths), max(heights)))
-                x = 0
-                for img in per_mode_images:
-                    combined.paste(img, (x, 0))
-                    x += img.size[0]
+            global_prompt_idx += 1
 
-                base_name = (
-                    f"{global_idx:05d}"
-                    f"_t{job['template_idx']:02d}"
-                    f"_s{job['seed']:02d}"
-                    f"_{safe_name(job['concept'])}"
-                )
-                combined.save(os.path.join(combine_dir, base_name + ".png"))
-
-            global_idx += 1
-
-        start = end
-
-    print("[DONE] AdaVD normal-checkpoint generation complete.")
+    mf.close()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
