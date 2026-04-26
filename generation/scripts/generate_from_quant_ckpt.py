@@ -10,18 +10,28 @@ from pathlib import Path
 import sys
 from typing import Dict, List, Any
 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+# ---- HF Hub compatibility patch: must run before quantization_tools/diffusers imports ----
+try:
+    import huggingface_hub
+    from huggingface_hub import hf_hub_download
+
+    if not hasattr(huggingface_hub, "cached_download"):
+        huggingface_hub.cached_download = hf_hub_download
+except Exception as e:
+    print(f"[WARN] huggingface_hub cached_download monkeypatch failed: {e}")
+# --------------------------------------------------------------------------------------
+
 import torch
 import numpy as np
 from PIL import Image
 from pytorch_lightning import seed_everything
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-
 from quantization_tools.utils.utils import find_layers
 from quantization_tools.quantization.layers import LinearQuantHub, Conv2dQuantHub
-
 
 all_quant_layers = {}
 

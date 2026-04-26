@@ -2,8 +2,18 @@
 import argparse
 import os
 import json
+import sys
 
 import torch
+import huggingface_hub
+
+if not hasattr(huggingface_hub, "cached_download"):
+    huggingface_hub.cached_download = huggingface_hub.hf_hub_download
+    sys.modules["huggingface_hub"].cached_download = huggingface_hub.hf_hub_download
+
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["DIFFUSERS_OFFLINE"] = "1"
 from diffusers import StableDiffusionPipeline
 
 
@@ -14,7 +24,7 @@ def parse_args():
     parser.add_argument(
         "--base_model",
         type=str,
-        default="runwayml/stable-diffusion-v1-5",
+        default="models/stable-diffusion-v1-5",
         help="Base SD model (HF id, local diffusers dir, or local HF snapshot dir).",
     )
     parser.add_argument(
@@ -33,7 +43,7 @@ def parse_args():
         "--alphas",
         type=float,
         nargs="+",
-        default=[1.0, 0.5, 0.25, 0.125, 0.0625],
+        default= [0.75,0.9],
         help="Scaling factors alpha.",
     )
     parser.add_argument(

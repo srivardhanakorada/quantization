@@ -1,6 +1,85 @@
 from pytorch_lightning import seed_everything
 import os, sys
 sys.path.append(os.getcwd())
+
+# ------------------------------------------------------------------
+# Monkeypatch for:
+# ImportError: cannot import name 'cached_download' from huggingface_hub
+# Old diffusers expects huggingface_hub.cached_download.
+# Newer huggingface_hub removed it; hf_hub_download is the replacement.
+# ------------------------------------------------------------------
+try:
+    import huggingface_hub
+
+    if not hasattr(huggingface_hub, "cached_download"):
+        from huggingface_hub import hf_hub_download
+
+        def cached_download(*args, **kwargs):
+            """
+            Compatibility shim for old diffusers code paths.
+
+            Supports the common usage pattern where old code calls:
+                cached_download(url_or_filename, ...)
+            or indirectly expects a hub-style downloader.
+
+            If called with a Hugging Face Hub style signature, forward to
+            hf_hub_download. If called with a plain URL, fail explicitly.
+            """
+            # Case 1: old callers may pass library-style kwargs already suitable
+            # for hf_hub_download, e.g. repo_id=..., filename=...
+            if "repo_id" in kwargs and "filename" in kwargs:
+                allowed = {
+                    "repo_id",
+                    "filename",
+                    "subfolder",
+                    "repo_type",
+                    "revision",
+                    "cache_dir",
+                    "local_dir",
+                    "local_dir_use_symlinks",
+                    "force_download",
+                    "proxies",
+                    "etag_timeout",
+                    "token",
+                    "local_files_only",
+                    "headers",
+                    "endpoint",
+                    "resume_download",
+                    "force_filename",
+                }
+                filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
+                return hf_hub_download(**filtered_kwargs)
+
+            # Case 2: positional usage like cached_download(url, ...)
+            # This compatibility shim does not emulate arbitrary URL download.
+            if len(args) > 0:
+                first = args[0]
+                if isinstance(first, str) and (first.startswith("http://") or first.startswith("https://")):
+                    raise RuntimeError(
+                        "This monkeypatch only supports Hugging Face Hub downloads, "
+                        "but cached_download was called with a raw URL: {}".format(first)
+                    )
+
+            # Case 3: repo_id / filename may be passed positionally
+            if len(args) >= 2 and all(isinstance(x, str) for x in args[:2]):
+                repo_id, filename = args[:2]
+                return hf_hub_download(
+                    repo_id=repo_id,
+                    filename=filename,
+                    **kwargs
+                )
+
+            raise TypeError(
+                "Unsupported cached_download call signature. "
+                "Expected repo_id/filename-style Hugging Face Hub arguments."
+            )
+
+        huggingface_hub.cached_download = cached_download
+
+except Exception as e:
+    print(f"[WARN] huggingface_hub monkeypatch failed: {e}")
+# ------------------------------------------------------------------
+
 import torch
 from tqdm import tqdm
 from quantization_tools.utils.utils import replace_module, find_layers

@@ -5,11 +5,11 @@
     "Leonardo DiCaprio",
     "Lionel Messi"
   ],
-  "preserve_concepts": {
-    "Bill Clinton": ["Barack Obama"],
-    "Leonardo DiCaprio": ["Brad Pitt"],
-    "Lionel Messi": ["Cristiano Ronaldo"]
-  },
+  "preserve_concepts": [
+    "Barack Obama",
+    "Brad Pitt",
+    "Cristiano Ronaldo"
+  ],
   "anchor_concepts": [
     "a generic person"
   ],

@@ -9,6 +9,7 @@ scaled_models/
 *.png
 *.safetensors
 *.ckpt
+models/
 
 # C extensions
 *.so

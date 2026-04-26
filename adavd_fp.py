@@ -12,6 +12,17 @@ from PIL import Image
 from tqdm import tqdm
 from einops import rearrange
 
+# ---- HF Hub compatibility patch: must run before diffusers imports ----
+try:
+    import huggingface_hub
+    from huggingface_hub import hf_hub_download
+
+    if not hasattr(huggingface_hub, "cached_download"):
+        huggingface_hub.cached_download = hf_hub_download
+except Exception as e:
+    print(f"[WARN] huggingface_hub cached_download monkeypatch failed: {e}")
+# --------------------------------------------------------------------
+
 import torch
 from torch import nn
 from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
@@ -399,7 +410,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--save_root', type=str, required=True)
-    parser.add_argument('--sd_ckpt', type=str, default="runwayml/stable-diffusion-v1-5")
+    parser.add_argument('--sd_ckpt', type=str, default="models/stable-diffusion-v1-5")
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--mode', type=str, default='retain', help='keep as retain')
     parser.add_argument('--decomp_timestep', type=int, default=0)
